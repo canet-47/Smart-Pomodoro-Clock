@@ -1,0 +1,102 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);   // try 0x3F if the screen stays blank
+
+const int TRIG_PIN = 7;
+const int ECHO_PIN = 6;
+const int LED_PIN = 8;
+const int BUZZER_PIN = 9;
+
+const int TRIGGER_DISTANCE = 10;            // cm, hand closer than this = "detected"
+const unsigned long LOCKOUT_MS = 1500;      // ignore the sensor this long after a toggle
+const unsigned long SESSION_MIN = 25;       // study session length in minutes
+
+unsigned long remainingMs = SESSION_MIN * 60UL * 1000UL;
+unsigned long lastTick = 0;
+unsigned long lastToggle = 0;
+bool running = false;      // starts paused, wave to start
+bool finished = false;
+bool wasDetected = false;
+
+long readDistanceCm() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0) return 999;
+  return duration * 0.034 / 2;
+}
+
+void showTime(unsigned long ms) {
+  unsigned long totalSec = ms / 1000;
+  char buf[17];
+  snprintf(buf, sizeof(buf), "%02lu:%02lu", totalSec / 60, totalSec % 60);
+  lcd.setCursor(0, 0);
+  lcd.print(buf);
+}
+
+void showStatus() {
+  lcd.setCursor(0, 1);
+  lcd.print(running ? "Locked in...>_<     " : "Paused - wave    ");
+}
+
+void setup() {
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Study timer");
+  delay(1500);
+  lcd.clear();
+  showStatus();
+  lastTick = millis();
+}
+
+void loop() {
+  if (finished) {
+    digitalWrite(LED_PIN, HIGH);
+    tone(BUZZER_PIN, 1000, 200);
+    delay(300);
+    digitalWrite(LED_PIN, LOW);
+    delay(300);
+    return;
+  }
+
+  unsigned long now = millis();
+  unsigned long elapsed = now - lastTick;
+  lastTick = now;
+
+  // detection: toggle on a new detection, only after the lockout has passed
+  bool detected = readDistanceCm() < TRIGGER_DISTANCE;
+  if (detected && !wasDetected && (now - lastToggle > LOCKOUT_MS)) {
+    running = !running;
+    lastToggle = now;
+    tone(BUZZER_PIN, running ? 1500 : 700, 100);   // high beep = start, low = pause
+    showStatus();
+  }
+  wasDetected = detected;
+
+  // count down only while running
+  if (running) {
+    remainingMs = (elapsed >= remainingMs) ? 0 : remainingMs - elapsed;
+  }
+  digitalWrite(LED_PIN, running ? HIGH : LOW);   // LED on = timer running
+
+  showTime(remainingMs);
+
+  if (remainingMs == 0) {
+    finished = true;
+    lcd.clear();
+    lcd.print("Session done!");
+    lcd.setCursor(0, 1);
+    lcd.print("Take a break :)");
+  }
+
+  delay(100);
+}
